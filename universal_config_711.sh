@@ -61,7 +61,7 @@ install_awg_packages() {
         fi
     fi
     
-    if opkg list-installed | grep -q luci-proto-amneziawg; then
+    if opkg list-installed | grep -q luci-app-amneziawg; then
         echo "luci-app-amneziawg already installed"
     else
         LUCI_APP_AMNEZIAWG_FILENAME="luci-app-amneziawg${PKGPOSTFIX}"
@@ -120,25 +120,38 @@ manage_package() {
     fi
 }
 
-checkPackageAndInstall()
-{
+checkPackageAndInstall() {
     local name="$1"
-    local isRequried="$2"
-    #проверяем установлени ли библиотека $name
-    if opkg list-installed | grep -q $name; then
-        echo "$name already installed..."
+    local isRequired="$2"
+    local alt=""
+
+    if [ "$name" = "https-dns-proxy" ]; then
+        alt="luci-app-doh-proxy"
+    fi
+
+    if [ -n "$alt" ]; then
+        if opkg list-installed | grep -qE "^($name|$alt) "; then
+            echo "$name or $alt already installed..."
+            return 0
+        fi
     else
-        echo "$name not installed. Installed $name..."
-        opkg install $name
-		res=$?
-		if [ "$isRequried" = "1" ]; then
-			if [ $res -eq 0 ]; then
-				echo "$name insalled successfully"
-			else
-				echo "Error installing $name. Please, install $name manually and run the script again"
-				exit 1
-			fi
-		fi
+        if opkg list-installed | grep -q "^$name "; then
+            echo "$name already installed..."
+            return 0
+        fi
+    fi
+
+    echo "$name not installed. Installing $name..."
+    opkg install "$name"
+    res=$?
+
+    if [ "$isRequired" = "1" ]; then
+        if [ $res -eq 0 ]; then
+            echo "$name installed successfully"
+        else
+            echo "Error installing $name. Please, install $name manually$( [ -n "$alt" ] && echo " or $alt") and run the script again."
+            exit 1
+        fi
     fi
 }
 
@@ -470,15 +483,12 @@ byPassGeoBlockComssDNS()
 deleteByPassGeoBlockComssDNS()
 {
 	uci del dhcp.cfg01411c.server
-	uci add_list dhcp.cfg01411c.server='127.0.0.1#5053'
-	uci add_list dhcp.cfg01411c.server='127.0.0.1#5054'
-	uci add_list dhcp.cfg01411c.server='127.0.0.1#5055'
-	uci add_list dhcp.cfg01411c.server='127.0.0.1#5056'
+	uci add_list dhcp.cfg01411c.server='127.0.0.1#5359'
 	while uci del dhcp.@domain[-1] ; do : ;  done;
 	uci commit dhcp
 	service dnsmasq restart
 	service odhcpd restart
-	service https-dns-proxy restart
+	service doh-proxy restart
 }
 
 install_youtubeunblock_packages() {
@@ -577,64 +587,39 @@ else
 	is_reconfig_podkop="n"
 fi
 
+
 echo "Update list packages..."
 opkg update
 
 checkPackageAndInstall "coreutils-base64" "1"
 
 #проверка и установка пакетов AmneziaWG
-install_awg_packages
+#install_awg_packages
 
 checkPackageAndInstall "jq" "1"
 checkPackageAndInstall "curl" "1"
 checkPackageAndInstall "unzip" "1"
-#checkPackageAndInstall "sing-box" "1"
 checkPackageAndInstall "opera-proxy" "1"
-checkPackageAndInstall "youtubeUnblock" "1"
+checkPackageAndInstall "zapret" "1"
+opkg remove --force-removal-of-dependent-packages "sing-box"
 
-###########
-manage_package "podkop" "enable" "stop"
-
-PACKAGE="sing-box"
-REQUIRED_VERSION="1.11.15"
-
-INSTALLED_VERSION=$(opkg list-installed | grep "^$PACKAGE" | cut -d ' ' -f 3)
-if [ -n "$INSTALLED_VERSION" ] && [ "$INSTALLED_VERSION" != "$REQUIRED_VERSION" ]; then
-    echo "Version package $PACKAGE not equal $REQUIRED_VERSION. Removed packages..."
-	opkg remove --force-removal-of-dependent-packages $PACKAGE
+findVersion="1.12.0"
+if opkg list-installed | grep "^sing-box-tiny" && printf '%s\n%s\n' "$findVersion" "$VERSION" | sort -V | tail -n1 | grep -qx -- "$VERSION"; then
+	printf "\033[32;1mInstalled new sing-box-tiny. Running scprit...\033[0m\n"
+else
+	printf "\033[32;1mInstalled old sing-box-tiny or not install sing-box-tiny. Reinstall sing-box-tiny...\033[0m\n"
+	manage_package "podkop" "enable" "stop"
+	opkg remove --force-removal-of-dependent-packages "sing-box-tiny"
+	checkPackageAndInstall "sing-box-tiny" "1"
 fi
 
-INSTALLED_VERSION=$(opkg list-installed | grep "^$PACKAGE")
-if [ -z "$INSTALLED_VERSION" ]; then
-	PACK_NAME="sing-box"
-	AWG_DIR="/tmp/$PACK_NAME"
-	SINGBOX_FILENAME="sing-box_1.11.15_openwrt_aarch64_cortex-a53.ipk"
-	BASE_URL="https://github.com/SagerNet/sing-box/releases/download/v1.11.15/"
-	DOWNLOAD_URL="${BASE_URL}${SINGBOX_FILENAME}"
-	mkdir -p "$AWG_DIR"
-	#echo $DOWNLOAD_URL
+opkg upgrade amneziawg-tools
+opkg upgrade kmod-amneziawg
+opkg upgrade luci-app-amneziawg
 
-	wget -O "$AWG_DIR/$SINGBOX_FILENAME" "$DOWNLOAD_URL"
-	if [ $? -eq 0 ]; then
-		echo "$PACK_NAME file downloaded successfully"
-	else
-		echo "Error downloading $PACK_NAME. Please, install $PACK_NAME manually and run the script again"
-		exit 1
-	fi
-			
-	opkg install "$AWG_DIR/$SINGBOX_FILENAME"
-	if [ $? -eq 0 ]; then
-		echo "$PACK_NAME file installing successfully"
-	else
-		echo "Error installing $PACK_NAME. Please, install $PACK_NAME manually and run the script again"
-		exit 1
-	fi
-fi
-###########
-
-opkg upgrade youtubeUnblock
-opkg upgrade luci-app-youtubeUnblock
-manage_package "youtubeUnblock" "enable" "start"
+opkg upgrade zapret
+opkg upgrade luci-app-zapret
+manage_package "zapret" "enable" "start"
 
 #проверяем установлени ли пакет dnsmasq-full
 if opkg list-installed | grep -q dnsmasq-full; then
@@ -647,20 +632,37 @@ else
 	[ -f /etc/config/dhcp-opkg ] && cp /etc/config/dhcp /etc/config/dhcp-old && mv /etc/config/dhcp-opkg /etc/config/dhcp
 fi
 
-printf "Setting confdir dnsmasq"
+printf "Setting confdir dnsmasq\n"
 uci set dhcp.@dnsmasq[0].confdir='/tmp/dnsmasq.d'
 uci commit dhcp
 
 DIR="/etc/config"
-DIR_BACKUP="/root/backup3"
+DIR_BACKUP="/root/backup6"
 config_files="network
 firewall
-https-dns-proxy
-youtubeUnblock
-dhcp"
+doh-proxy
+zapret
+dhcp
+dns-failsafe-proxy
+stubby
+wdoc
+wdoc-singbox
+wdoc-warp
+wdoc-wg"
 URL="https://raw.githubusercontent.com/routerich/RouterichAX3000_configs/refs/heads/podkop0711"
 
-checkPackageAndInstall "https-dns-proxy" "0"
+checkPackageAndInstall "luci-app-dns-failsafe-proxy" "1"
+checkPackageAndInstall "luci-i18n-stubby-ru" "1"
+checkPackageAndInstall "luci-i18n-doh-proxy-ru" "1"
+checkPackageAndInstall "luci-i18n-wdoc-singbox-ru" "1"
+checkPackageAndInstall "luci-i18n-wdoc-warp-ru" "1"
+checkPackageAndInstall "luci-i18n-wdoc-wg-ru" "1"
+
+#проверяем установлени ли пакет https-dns-proxy
+if opkg list-installed | grep -q https-dns-proxy; then
+	echo "Delete packet https-dns-proxy..."
+	opkg remove --force-removal-of-dependent-packages "https-dns-proxy"
+fi
 
 if [ ! -d "$DIR_BACKUP" ]
 then
@@ -674,7 +676,7 @@ then
 
 	for file in $config_files
 	do
-		if [ "$file" == "https-dns-proxy" ] 
+		if [ "$file" == "doh-proxy" ] || [ "$file" == "dns-failsafe-proxy" ] || [ "$file" == "stubby" ] || [ "$file" == "wdoc" ] || [ "$file" == "wdoc-singbox" ] || [ "$file" == "wdoc-warp" ]
 		then 
 		  wget -O "$DIR/$file" "$URL/config_files/$file" 
 		fi
@@ -687,45 +689,45 @@ uci set dhcp.cfg01411c.strictorder='1'
 uci set dhcp.cfg01411c.filter_aaaa='1'
 uci commit dhcp
 
-cat <<EOF > /etc/sing-box/config.json
-{
-	"log": {
-	"disabled": true,
-	"level": "error"
-},
-"inbounds": [
-	{
-	"type": "tproxy",
-	"listen": "::",
-	"listen_port": 1100,
-	"sniff": false
-	}
-],
-"outbounds": [
-	{
-	"type": "http",
-	"server": "127.0.0.1",
-	"server_port": 18080
-	}
-],
-"route": {
-	"auto_detect_interface": true
-}
-}
-EOF
+#cat <<EOF > /etc/sing-box/config.json
+#{
+#	"log": {
+#	"disabled": true,
+#	"level": "error"
+#},
+#"inbounds": [
+#	{
+#	"type": "tproxy",
+#	"listen": "::",
+#	"listen_port": 1100,
+#	"sniff": false
+#	}
+#],
+#"outbounds": [
+#	{
+#	"type": "http",
+#	"server": "127.0.0.1",
+#	"server_port": 18080
+#	}
+#],
+#"route": {
+#	"auto_detect_interface": true
+#}
+#}
+#EOF
 
-echo "Setting sing-box..."
-uci set sing-box.main.enabled='1'
-uci set sing-box.main.user='root'
-uci add_list sing-box.main.ifaces='wan'
-uci add_list sing-box.main.ifaces='wan2'
-uci add_list sing-box.main.ifaces='wan6'
-uci add_list sing-box.main.ifaces='wwan'
-uci add_list sing-box.main.ifaces='wwan0'
-uci add_list sing-box.main.ifaces='modem'
-uci add_list sing-box.main.ifaces='l2tp'
-uci add_list sing-box.main.ifaces='pptp'
-uci commit sing-box
+#echo "Setting sing-box..."
+#uci set sing-box.main.enabled='1'
+#uci set sing-box.main.user='root'
+#uci add_list sing-box.main.ifaces='wan'
+#uci add_list sing-box.main.ifaces='wan2'
+#uci add_list sing-box.main.ifaces='wan6'
+#uci add_list sing-box.main.ifaces='wwan'
+#uci add_list sing-box.main.ifaces='wwan0'
+#uci add_list sing-box.main.ifaces='modem'
+#uci add_list sing-box.main.ifaces='l2tp'
+#uci add_list sing-box.main.ifaces='pptp'
+#uci commit sing-box
 
 nameRule="option name 'Block_UDP_443'"
 str=$(grep -i "$nameRule" /etc/config/firewall)
@@ -750,38 +752,58 @@ then
   uci commit firewall
 fi
 
-printf "\033[32;1mCheck work youtubeUnblock..\033[0m\n"
+printf "\033[32;1mCheck work zapret.\033[0m\n"
 #install_youtubeunblock_packages
-opkg upgrade youtubeUnblock
-opkg upgrade luci-app-youtubeUnblock
-manage_package "youtubeUnblock" "enable" "start"
-wget -O "/etc/config/youtubeUnblock" "$URL/config_files/youtubeUnblockSecond"
+opkg upgrade zapret
+opkg upgrade luci-app-zapret
+manage_package "zapret" "enable" "start"
+wget -O "/etc/config/zapret" "$URL/config_files/zapret"
+wget -O "/opt/zapret/ipset/zapret-hosts-user.txt" "$URL/config_files/zapret-hosts-user.txt"
+wget -O "/opt/zapret/ipset/zapret-hosts-user-exclude.txt" "$URL/config_files/zapret-hosts-user-exclude.txt"
+wget -O "/opt/zapret/init.d/openwrt/custom.d/50-stun4all" "$URL/config_files/50-stun4all"
+chmod +x "/opt/zapret/init.d/openwrt/custom.d/50-stun4all"
+
 manage_package "podkop" "enable" "stop"
-service youtubeUnblock restart
+manage_package "youtubeUnblock" "disable" "stop"
+service zapret restart
 
-isWorkYoutubeUnBlock=0
+isWorkZapret=0
 
-curl -f -o /dev/null -k --connect-to ::google.com -L -H "Host: mirror.gcr.io" --max-time 360 https://test.googlevideo.com/v2/cimg/android/blobs/sha256:6fd8bdac3da660bde7bd0b6f2b6a46e1b686afb74b9a4614def32532b73f5eaa
+curl -f -o /dev/null -k --connect-to ::google.com -L -H "Host: mirror.gcr.io" --max-time 120 https://test.googlevideo.com/v2/cimg/android/blobs/sha256:2ab09b027e7f3a0c2e8bb1944ac46de38cebab7145f0bd6effebfe5492c818b6
 
 # Проверяем код выхода
 if [ $? -eq 0 ]; then
-	printf "\033[32;1myoutubeUnblock well work...\033[0m\n"
-	cronTask="0 4 * * * service youtubeUnblock restart"
-	str=$(grep -i "0 4 \* \* \* service youtubeUnblock restart" /etc/crontabs/root)
+	printf "\033[32;1mzapret well work...\033[0m\n"
+	cronTask="0 4 * * * service zapret restart"
+	str=$(grep -i "0 4 \* \* \* service zapret restart" /etc/crontabs/root)
 	if [ -z "$str" ] 
 	then
-		echo "Add cron task auto reboot service youtubeUnblock..."
+		echo "Add cron task auto reboot service zapret..."
 		echo "$cronTask" >> /etc/crontabs/root
 	fi
-	isWorkYoutubeUnBlock=1
-else
-	manage_package "youtubeUnblock" "disable" "stop"
-	printf "\033[32;1myoutubeUnblock not work...\033[0m\n"
-	isWorkYoutubeUnBlock=0
 	str=$(grep -i "0 4 \* \* \* service youtubeUnblock restart" /etc/crontabs/root)
 	if [ ! -z "$str" ]
 	then
 		grep -v "0 4 \* \* \* service youtubeUnblock restart" /etc/crontabs/root > /etc/crontabs/temp
+		cp -f "/etc/crontabs/temp" "/etc/crontabs/root"
+		rm -f "/etc/crontabs/temp"
+	fi
+	isWorkZapret=1
+else
+	manage_package "zapret" "disable" "stop"
+	printf "\033[32;1mzapret not work...\033[0m\n"
+	isWorkZapret=0
+	str=$(grep -i "0 4 \* \* \* service youtubeUnblock restart" /etc/crontabs/root)
+	if [ ! -z "$str" ]
+	then
+		grep -v "0 4 \* \* \* service youtubeUnblock restart" /etc/crontabs/root > /etc/crontabs/temp
+		cp -f "/etc/crontabs/temp" "/etc/crontabs/root"
+		rm -f "/etc/crontabs/temp"
+	fi
+	str=$(grep -i "0 4 \* \* \* service zapret restart" /etc/crontabs/root)
+	if [ ! -z "$str" ]
+	then
+		grep -v "0 4 \* \* \* service zapret restart" /etc/crontabs/root > /etc/crontabs/temp
 		cp -f "/etc/crontabs/temp" "/etc/crontabs/root"
 		rm -f "/etc/crontabs/temp"
 	fi
@@ -978,6 +1000,11 @@ do
 		uci set network.${INTERFACE_NAME}.awg_h2=$H2
 		uci set network.${INTERFACE_NAME}.awg_h3=$H3
 		uci set network.${INTERFACE_NAME}.awg_h4=$H4
+		if [ -z "$I1" ] 
+		then
+			I1="<b 0xc10000000114367096bb0fb3f58f3a3fb8aaacd61d63a1c8a40e14f7374b8a62dccba6431716c3abf6f5afbcfb39bd008000047c32e268567c652e6f4db58bff759bc8c5aaca183b87cb4d22938fe7d8dca22a679a79e4d9ee62e4bbb3a380dd78d4e8e48f26b38a1d42d76b371a5a9a0444827a69d1ab5872a85749f65a4104e931740b4dc1e2dd77733fc7fac4f93011cd622f2bb47e85f71992e2d585f8dc765a7a12ddeb879746a267393ad023d267c4bd79f258703e27345155268bd3cc0506ebd72e2e3c6b5b0f005299cd94b67ddabe30389c4f9b5c2d512dcc298c14f14e9b7f931e1dc397926c31fbb7cebfc668349c218672501031ecce151d4cb03c4c660b6c6fe7754e75446cd7de09a8c81030c5f6fb377203f551864f3d83e27de7b86499736cbbb549b2f37f436db1cae0a4ea39930f0534aacdd1e3534bc87877e2afabe959ced261f228d6362e6fd277c88c312d966c8b9f67e4a92e757773db0b0862fb8108d1d8fa262a40a1b4171961f0704c8ba314da2482ac8ed9bd28d4b50f7432d89fd800c25a50c5e2f5c0710544fef5273401116aa0572366d8e49ad758fcb29e6a92912e644dbe227c247cb3417eabfab2db16796b2fba420de3b1dc94e8361f1f324a331ddaf1e626553138860757fd0bf687566108b77b70fb9f8f8962eca599c4a70ed373666961a8cb506b96756d9e28b94122b20f16b54f118c0e603ce0b831efea614ad836df6cf9affbdd09596412547496967da758cec9080295d853b0861670b71d9abde0d562b1a6de82782a5b0c14d297f27283a895abc889a5f6703f0e6eb95f67b2da45f150d0d8ab805612d570c2d5cb6997ac3a7756226c2f5c8982ffbd480c5004b0660a3c9468945efde90864019a2b519458724b55d766e16b0da25c0557c01f3c11ddeb024b62e303640e17fdd57dedb3aeb4a2c1b7c93059f9c1d7118d77caac1cd0f6556e46cbc991c1bb16970273dea833d01e5090d061a0c6d25af2415cd2878af97f6d0e7f1f936247b394ecb9bd484da6be936dee9b0b92dc90101a1b4295e97a9772f2263eb09431995aa173df4ca2abd687d87706f0f93eaa5e13cbe3b574fa3cfe94502ace25265778da6960d561381769c24e0cbd7aac73c16f95ae74ff7ec38124f7c722b9cb151d4b6841343f29be8f35145e1b27021056820fed77003df8554b4155716c8cf6049ef5e318481460a8ce3be7c7bfac695255be84dc491c19e9dedc449dd3471728cd2a3ee51324ccb3eef121e3e08f8e18f0006ea8957371d9f2f739f0b89e4db11e5c6430ada61572e589519fbad4498b460ce6e4407fc2d8f2dd4293a50a0cb8fcaaf35cd9a8cc097e3603fbfa08d9036f52b3e7fcce11b83ad28a4ac12dba0395a0cc871cefd1a2856fffb3f28d82ce35cf80579974778bab13d9b3578d8c75a2d196087a2cd439aff2bb33f2db24ac175fff4ed91d36a4cdbfaf3f83074f03894ea40f17034629890da3efdbb41141b38368ab532209b69f057ddc559c19bc8ae62bf3fd564c9a35d9a83d14a95834a92bae6d9a29ae5e8ece07910d16433e4c6230c9bd7d68b47de0de9843988af6dc88b5301820443bd4d0537778bf6b4c1dd067fcf14b81015f2a67c7f2a28f9cb7e0684d3cb4b1c24d9b343122a086611b489532f1c3a26779da1706c6759d96d8ab>"
+		fi
+		uci set network.${INTERFACE_NAME}.awg_i1="$I1"
 		uci set network.${INTERFACE_NAME}.nohostroute='1'
 		
 		uci set network.@${CONFIG_NAME}[-1].description="${INTERFACE_NAME}_peer"
@@ -1043,7 +1070,7 @@ do
 		if [ "$is_manual_input_parameters" = "n" ]; then
 			I=0
 			WARP_ENDPOINT_HOSTS="engage.cloudflareclient.com 162.159.192.1 162.159.192.2 162.159.192.4 162.159.195.1 162.159.195.4 188.114.96.1 188.114.96.23 188.114.96.50 188.114.96.81"
-			WARP_ENDPOINT_PORTS="500"
+			WARP_ENDPOINT_PORTS="500 1701 2408 3138 4500"
 			for element in $WARP_ENDPOINT_HOSTS; do
 				EndpointIP="$element"
 				for element2 in $WARP_ENDPOINT_PORTS; do
@@ -1106,30 +1133,30 @@ else
 	isWorkWARP=0
 fi
 
-echo "isWorkYoutubeUnBlock = $isWorkYoutubeUnBlock, isWorkOperaProxy = $isWorkOperaProxy, isWorkWARP = $isWorkWARP"
+echo "isWorkZapret = $isWorkZapret, isWorkOperaProxy = $isWorkOperaProxy, isWorkWARP = $isWorkWARP"
 
-if [ "$isWorkYoutubeUnBlock" = "1" ] && [ "$isWorkOperaProxy" = "1" ] && [ "$isWorkWARP" = "1" ] 
+if [ "$isWorkZapret" = "1" ] && [ "$isWorkOperaProxy" = "1" ] && [ "$isWorkWARP" = "1" ] 
 then
 	varByPass=1
-elif [ "$isWorkYoutubeUnBlock" = "0" ] && [ "$isWorkOperaProxy" = "1" ] && [ "$isWorkWARP" = "1" ] 
+elif [ "$isWorkZapret" = "0" ] && [ "$isWorkOperaProxy" = "1" ] && [ "$isWorkWARP" = "1" ] 
 then
 	varByPass=2
-elif [ "$isWorkYoutubeUnBlock" = "1" ] && [ "$isWorkOperaProxy" = "1" ] && [ "$isWorkWARP" = "0" ] 
+elif [ "$isWorkZapret" = "1" ] && [ "$isWorkOperaProxy" = "1" ] && [ "$isWorkWARP" = "0" ] 
 then
 	varByPass=3
-elif [ "$isWorkYoutubeUnBlock" = "0" ] && [ "$isWorkOperaProxy" = "1" ] && [ "$isWorkWARP" = "0" ] 
+elif [ "$isWorkZapret" = "0" ] && [ "$isWorkOperaProxy" = "1" ] && [ "$isWorkWARP" = "0" ] 
 then
 	varByPass=4
-elif [ "$isWorkYoutubeUnBlock" = "1" ] && [ "$isWorkOperaProxy" = "0" ] && [ "$isWorkWARP" = "0" ] 
+elif [ "$isWorkZapret" = "1" ] && [ "$isWorkOperaProxy" = "0" ] && [ "$isWorkWARP" = "0" ] 
 then
 	varByPass=5
-elif [ "$isWorkYoutubeUnBlock" = "0" ] && [ "$isWorkOperaProxy" = "0" ] && [ "$isWorkWARP" = "1" ] 
+elif [ "$isWorkZapret" = "0" ] && [ "$isWorkOperaProxy" = "0" ] && [ "$isWorkWARP" = "1" ] 
 then
 	varByPass=6
-elif [ "$isWorkYoutubeUnBlock" = "1" ] && [ "$isWorkOperaProxy" = "0" ] && [ "$isWorkWARP" = "1" ] 
+elif [ "$isWorkZapret" = "1" ] && [ "$isWorkOperaProxy" = "0" ] && [ "$isWorkWARP" = "1" ] 
 then
 	varByPass=7
-elif [ "$isWorkYoutubeUnBlock" = "0" ] && [ "$isWorkOperaProxy" = "0" ] && [ "$isWorkWARP" = "0" ] 
+elif [ "$isWorkZapret" = "0" ] && [ "$isWorkOperaProxy" = "0" ] && [ "$isWorkWARP" = "0" ] 
 then
 	varByPass=8
 fi
@@ -1146,66 +1173,76 @@ messageComplete=""
 
 case $varByPass in
 1)
-	nameFileReplacePodkop="podkopNoYoutube"
-	printf  "\033[32;1mStop and disabled service 'ruantiblock'...\033[0m\n"
+	nameFileReplacePodkop="podkopNewNoYoutube"
+	printf  "\033[32;1mStop and disabled service 'ruantiblock' and 'youtubeUnblock'...\033[0m\n"
 	manage_package "ruantiblock" "disable" "stop"
-	wget -O "/etc/config/youtubeUnblock" "$URL/config_files/youtubeUnblockSecond"
-	service youtubeUnblock restart
+	manage_package "youtubeUnblock" "disable" "stop"
+	service zapret restart
 	deleteByPassGeoBlockComssDNS
-	messageComplete="ByPass block for Method 1: AWG WARP + youtubeunblock + Opera Proxy...Configured completed..."
+	messageComplete="ByPass block for Method 1: AWG WARP + zapret + Opera Proxy...Configured completed..."
 	;;
 2)
-	nameFileReplacePodkop="podkop"
-	printf  "\033[32;1mStop and disabled service 'youtubeUnblock' and 'ruantiblock'...\033[0m\n"
+	nameFileReplacePodkop="podkopNew"
+	printf  "\033[32;1mStop and disabled service 'youtubeUnblock' and 'ruantiblock' and 'zapret'...\033[0m\n"
 	manage_package "youtubeUnblock" "disable" "stop"
 	manage_package "ruantiblock" "disable" "stop"
+	manage_package "zapret" "disable" "stop"
 	deleteByPassGeoBlockComssDNS
 	messageComplete="ByPass block for Method 2: AWG WARP + Opera Proxy...Configured completed..."
 	;;
 3)
-	nameFileReplacePodkop="podkopSecond"
-	printf  "\033[32;1mStop and disabled service 'ruantiblock'...\033[0m\n"
+	nameFileReplacePodkop="podkopNewSecond"
+	printf  "\033[32;1mStop and disabled service 'ruantiblock' and youtubeUnblock ...\033[0m\n"
 	manage_package "ruantiblock" "disable" "stop"
-	wget -O "/etc/config/youtubeUnblock" "$URL/config_files/youtubeUnblockSecondDiscord"
-	service youtubeUnblock restart
+	manage_package "youtubeUnblock" "disable" "stop"
+	wget -O "/opt/zapret/init.d/openwrt/custom.d/50-discord-media" "$URL/config_files/50-discord-media"
+	chmod +x "/opt/zapret/init.d/openwrt/custom.d/50-discord-media"
+	service zapret restart
 	deleteByPassGeoBlockComssDNS
-	messageComplete="ByPass block for Method 3: youtubeUnblock + Opera Proxy...Configured completed..."
+	messageComplete="ByPass block for Method 3: zapret + Opera Proxy...Configured completed..."
 	;;
 4)
-	nameFileReplacePodkop="podkopSecondYoutube"
-	printf  "\033[32;1mStop and disabled service 'youtubeUnblock' and 'ruantiblock'...\033[0m\n"
+	nameFileReplacePodkop="podkopNewSecondYoutube"
+	printf  "\033[32;1mStop and disabled service 'youtubeUnblock' and 'ruantiblock' and 'zapret'...\033[0m\n"
 	manage_package "youtubeUnblock" "disable" "stop"
 	manage_package "ruantiblock" "disable" "stop"
+	manage_package "zapret" "disable" "stop"
 	deleteByPassGeoBlockComssDNS
 	messageComplete="ByPass block for Method 4: Only Opera Proxy...Configured completed..."
 	;;
 5)
-	nameFileReplacePodkop="podkopSecondYoutube"
-	printf  "\033[32;1mStop and disabled service 'ruantiblock' and 'podkop'...\033[0m\n"
+	nameFileReplacePodkop="podkopNewSecondYoutube"
+	printf  "\033[32;1mStop and disabled service 'ruantiblock' and 'podkop' and youtubeunblock...\033[0m\n"
 	manage_package "ruantiblock" "disable" "stop"
 	manage_package "podkop" "disable" "stop"
-	wget -O "/etc/config/youtubeUnblock" "$URL/config_files/youtubeUnblock"
-	service youtubeUnblock restart
+	manage_package "youtubeunblock" "disable" "stop"
+	wget -O "/opt/zapret/ipset/zapret-hosts-user.txt" "$URL/config_files/zapret-hosts-user-second.txt"
+	wget -O "/opt/zapret/init.d/openwrt/custom.d/50-discord-media" "$URL/config_files/50-discord-media"
+	chmod +x "/opt/zapret/init.d/openwrt/custom.d/50-discord-media"
+	service zapret restart
 	byPassGeoBlockComssDNS
-	printf "\033[32;1mByPass block for Method 5: youtubeUnblock + ComssDNS for GeoBlock...Configured completed...\033[0m\n"
+	printf "\033[32;1mByPass block for Method 5: zapret + ComssDNS for GeoBlock...Configured completed...\033[0m\n"
 	exit 1
 	;;
 6)
-	nameFileReplacePodkop="podkopWARP"
-	printf  "\033[32;1mStop and disabled service 'youtubeUnblock' and 'ruantiblock'...\033[0m\n"
+	nameFileReplacePodkop="podkopNewWARP"
+	printf  "\033[32;1mStop and disabled service 'youtubeUnblock' and 'ruantiblock' and 'zapret'...\033[0m\n"
 	manage_package "youtubeUnblock" "disable" "stop"
 	manage_package "ruantiblock" "disable" "stop"
+	manage_package "zapret" "disable" "stop"
 	byPassGeoBlockComssDNS
 	messageComplete="ByPass block for Method 6: AWG WARP + ComssDNS for GeoBlock...Configured completed..."
 	;;
 7)
-	nameFileReplacePodkop="podkopWARPNoYoutube"
-	printf  "\033[32;1mStop and disabled service 'ruantiblock'...\033[0m\n"
+	nameFileReplacePodkop="podkopNewWARPNoYoutube"
+	printf  "\033[32;1mStop and disabled service 'ruantiblock' and 'youtubeUnblock'...\033[0m\n"
 	manage_package "ruantiblock" "disable" "stop"
-	wget -O "/etc/config/youtubeUnblock" "$URL/config_files/youtubeUnblockSecond"
-	service youtubeUnblock restart
+	manage_package "youtubeUnblock" "disable" "stop"
+	wget -O "/opt/zapret/init.d/openwrt/custom.d/50-discord-media" "$URL/config_files/50-discord-media"
+	chmod +x "/opt/zapret/init.d/openwrt/custom.d/50-discord-media"
+	service zapret restart
 	byPassGeoBlockComssDNS
-	messageComplete="ByPass block for Method 7: AWG WARP + youtubeUnblock + ComssDNS for GeoBlock...Configured completed..."
+	messageComplete="ByPass block for Method 7: AWG WARP + zapret + ComssDNS for GeoBlock...Configured completed..."
 	;;
 8)
 	printf "\033[32;1mTry custom settings router to bypass the locks... Recomendation buy 'VPS' and up 'vless'\033[0m\n"
@@ -1217,7 +1254,7 @@ case $varByPass in
 esac
 
 PACKAGE="podkop"
-REQUIRED_VERSION="0.2.5-1"
+REQUIRED_VERSION="v0.7.7-r1"
 
 INSTALLED_VERSION=$(opkg list-installed | grep "^$PACKAGE" | cut -d ' ' -f 3)
 if [ -n "$INSTALLED_VERSION" ] && [ "$INSTALLED_VERSION" != "$REQUIRED_VERSION" ]; then
@@ -1243,9 +1280,9 @@ else
 	if [ "$is_install_podkop" = "y" ] || [ "$is_install_podkop" = "Y" ]; then
 		DOWNLOAD_DIR="/tmp/podkop"
 		mkdir -p "$DOWNLOAD_DIR"
-		podkop_files="podkop_0.2.5-1_all.ipk
-			luci-app-podkop_0.2.5_all.ipk
-			luci-i18n-podkop-ru_0.2.5.ipk"
+		podkop_files="podkop-v0.7.7-r1-all.ipk
+			luci-app-podkop-v0.7.7-r1-all.ipk
+			luci-i18n-podkop-ru-0.7.7.ipk"
 		for file in $podkop_files
 		do
 			echo "Download $file..."
@@ -1260,8 +1297,8 @@ else
 	fi
 fi
 
-printf  "\033[32;1mStart and enable service 'https-dns-proxy'...\033[0m\n"
-manage_package "https-dns-proxy" "enable" "start"
+printf  "\033[32;1mStart and enable service 'doh-proxy'...\033[0m\n"
+manage_package "doh-proxy" "enable" "start"
 
 str=$(grep -i "0 4 \* \* \* wget -O - $URL/configure_zaprets.sh | sh" /etc/crontabs/root)
 if [ ! -z "$str" ]
@@ -1282,6 +1319,14 @@ fi
 # Включаем интерфейс
 #ifup $INTERFACE_NAME
 
+service doh-proxy restart
+service stubby restart
+service wdoc restart
+service wdoc-singbox restart
+service wdoc-warp restart
+service wdoc-wg restart
+service dns-failsafe-proxy restart
+
 printf  "\033[32;1mService Podkop and Sing-Box restart...\033[0m\n"
 service sing-box enable
 service sing-box restart
@@ -1289,3 +1334,6 @@ service podkop enable
 service podkop restart
 
 printf "\033[32;1m$messageComplete\033[0m\n"
+printf "\033[31;1mAfter 10 second AUTOREBOOT ROUTER...\033[0m\n"
+sleep 10
+reboot

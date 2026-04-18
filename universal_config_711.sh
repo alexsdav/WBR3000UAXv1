@@ -61,7 +61,7 @@ install_awg_packages() {
         fi
     fi
     
-    if opkg list-installed | grep -q luci-app-amneziawg; then
+    if opkg list-installed | grep -q luci-proto-amneziawg; then
         echo "luci-app-amneziawg already installed"
     else
         LUCI_APP_AMNEZIAWG_FILENAME="luci-app-amneziawg${PKGPOSTFIX}"
